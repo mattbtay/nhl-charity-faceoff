@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
-import styled from 'styled-components';
+import styled, { keyframes, css } from 'styled-components';
 import { subscribeToDonationTotals } from '../config/firebase';
 import Spinner from './Spinner';
+import stripePromise from '../config/stripe';
 
 const Card = styled.div`
   display: flex;
@@ -85,19 +86,21 @@ const DonationInfo = styled.div`
 
 const DonationAmount = styled.div`
   font-family: ${props => props.theme.fonts.heading};
-  font-size: 3.5rem;
-  font-weight: 700;
-  color: ${props => props.teamColor || props.theme.colors.primary};
-  margin-bottom: 0.5rem;
+  font-size: 2.5rem;
+  font-weight: bold;
+  color: ${props => props.$teamColor || props.theme.colors.primary};
+  margin-top: 0.5rem;
   text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 2px;
   
-  &:before {
-    content: '$';
-    font-size: 2rem;
-    vertical-align: top;
-    margin-right: 0.25rem;
+  .currency {
+    font-size: 0.6em;
+    margin-right: 0.1em;
     opacity: 0.8;
-    display: ${props => props.isLoading ? 'none' : 'inline'};
+    display: ${props => props.$isLoading ? 'none' : 'inline'};
   }
 `;
 
@@ -109,9 +112,9 @@ const DonationLabel = styled.div`
   letter-spacing: 1px;
 `;
 
-const DonateButton = styled.a`
+const DonateButton = styled.button`
   display: inline-block;
-  background-color: ${props => props.teamColor || props.theme.colors.accent};
+  background-color: ${props => props.$teamColor || props.theme.colors.accent};
   color: white;
   padding: 1rem 2.5rem;
   border-radius: ${props => props.theme.borderRadius.medium};
@@ -122,6 +125,8 @@ const DonateButton = styled.a`
   position: relative;
   overflow: hidden;
   margin-top: 2rem;
+  border: none;
+  cursor: pointer;
 
   &:before {
     content: '';
@@ -152,6 +157,12 @@ const DonateButton = styled.a`
   &:active {
     transform: translateY(0);
   }
+
+  &:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+  }
 `;
 
 const LoadingContainer = styled.div`
@@ -163,45 +174,206 @@ const LoadingContainer = styled.div`
   min-height: 3.5rem;
 `;
 
+const numberTransition = keyframes`
+  0% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  50% {
+    transform: translateY(-10%);
+    opacity: 1;
+  }
+  75% {
+    transform: translateY(5%);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+`;
+
+const AnimatedContainer = styled.div`
+  color: ${props => props.$teamColor};
+  display: flex;
+  gap: 1px;
+  overflow: hidden;
+  position: relative;
+`;
+
+const AnimatedNumber = styled.span`
+  display: inline-block;
+  opacity: 0;
+  animation: ${numberTransition} 800ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation-delay: ${props => props.index * 50}ms;
+  
+  ${props => props.isAnimating && css`
+    animation: none;
+    opacity: 1;
+    transform: translateY(0);
+  `}
+  
+  ${props => props.shouldAnimate && css`
+    animation: ${numberTransition} 800ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    animation-delay: ${props => props.index * 50}ms;
+  `}
+`;
+
+const AnimatedValue = ({ value, teamColor }) => {
+  // Split the value into individual digits for animation
+  const digits = value.toString().split('');
+  
+  // Generate a unique key for each digit based on its position and value
+  return (
+    <AnimatedContainer $teamColor={teamColor}>
+      {digits.map((digit, index) => (
+        <AnimatedNumber 
+          key={`${value}-${index}-${digit}`}
+          index={index} 
+          shouldAnimate={true}
+        >
+          {digit}
+        </AnimatedNumber>
+      ))}
+    </AnimatedContainer>
+  );
+};
+
 const formatNumber = (number) => {
   return new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 0,
   }).format(number);
 };
 
-const TeamCard = ({ team, donationUrl }) => {
-  const [donationTotal, setDonationTotal] = useState(null);
-  const [error, setError] = useState(null);
+const TeamCard = ({ team }) => {
+  const [donationTotal, setDonationTotal] = useState(team.donationTotal || 0);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const previousTotalRef = useRef(team.donationTotal || 0);
+  const forceUpdate = useRef(0);
+  const animationKeyRef = useRef(Date.now());
 
+  // Effect for handling Firestore subscription
   useEffect(() => {
-    console.log('TeamCard mounted for team:', team.id);
+    console.log('🏒 Setting up donation subscription for team:', team.id, 'initial total:', team.donationTotal);
+    setIsLoading(true);
     
-    try {
-      // Subscribe to real-time updates
-      const unsubscribe = subscribeToDonationTotals((teams) => {
-        console.log('Received teams update in TeamCard:', teams);
-        const teamData = teams[team.id];
-        console.log('Found team data:', teamData);
-        if (teamData && teamData.donationTotal !== undefined) {
-          console.log('Updating donation total for', team.id, 'to', teamData.donationTotal);
-          setDonationTotal(teamData.donationTotal);
-          setError(null);
-        }
+    const unsubscribe = subscribeToDonationTotals(team.id, (total, error) => {
+      const timestamp = new Date().toISOString();
+      console.log('📝 Received donation update:', { 
+        teamId: team.id, 
+        total, 
+        error,
+        previousTotal: previousTotalRef.current,
+        timestamp
+      });
+      
+      if (error) {
+        console.error('❌ Error in donation subscription:', error);
+        setError(error);
         setIsLoading(false);
+        return;
+      }
+      
+      // Create a new animation key timestamp for each update
+      animationKeyRef.current = Date.now();
+      
+      // Always update the UI when we get a Firestore update, even if the amounts appear the same
+      // This ensures UI updates even when the server value is reset to the same value
+      console.log('💰 Updating donation total in UI:', { 
+        teamId: team.id, 
+        previousTotal: previousTotalRef.current, 
+        newTotal: total,
+        difference: total - previousTotalRef.current,
+        animationKey: animationKeyRef.current
+      });
+      
+      previousTotalRef.current = total;
+      setDonationTotal(total);
+      forceUpdate.current += 1; // Force the AnimatedValue to re-animate
+      
+      setIsLoading(false);
+    });
+
+    return () => {
+      console.log('🧹 Cleaning up donation subscription for team:', team.id);
+      unsubscribe();
+    };
+  }, [team.id]);
+
+  const handleDonateClick = async () => {
+    try {
+      setIsProcessing(true);
+      
+      // Create a checkout session
+      console.log(`Initiating donation for team: ${team.id}, charity: ${team.charityName}`);
+      const response = await fetch('/api/create-checkout-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          teamId: team.id,
+          charityName: team.charityName,
+          amount: 100, // $100 fixed donation amount
+        }),
       });
 
-      // Cleanup subscription on unmount
-      return () => {
-        console.log('TeamCard unmounting, cleaning up subscription');
-        unsubscribe();
-      };
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Checkout session creation failed:', response.status, errorData);
+        
+        // Check for specific Stripe configuration error
+        if (errorData.message === 'Stripe configuration error') {
+          throw new Error('Payment processing is currently unavailable. Please try again later or contact support.');
+        } else if (errorData.error && errorData.error.includes('API Key')) {
+          throw new Error('Payment system configuration error. Please notify the site administrator.');
+        } else {
+          throw new Error(errorData.message || `API error: ${response.status}`);
+        }
+      }
+
+      const data = await response.json();
+      
+      if (!data.sessionId) {
+        throw new Error('No session ID returned from API');
+      }
+      
+      console.log('Checkout session created, redirecting to Stripe');
+
+      // Get Stripe.js instance
+      const stripe = await stripePromise;
+      
+      // Check if Stripe is properly initialized
+      if (!stripe) {
+        throw new Error('Payment system is not available. Please check that the NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY environment variable is set.');
+      }
+
+      // Safely handle the redirectToCheckout call
+      try {
+        // Redirect to Checkout
+        const { error } = await stripe.redirectToCheckout({
+          sessionId: data.sessionId,
+        });
+
+        if (error) {
+          console.error('Error redirecting to checkout:', error);
+          throw error;
+        }
+      } catch (redirectError) {
+        console.error('Failed to redirect to checkout:', redirectError);
+        throw new Error('Could not open payment page. Please ensure cookies are enabled and try again.');
+      }
     } catch (error) {
-      console.error('Error in TeamCard effect:', error);
+      console.error('Error initiating donation:', error);
       setError(error);
-      setIsLoading(false);
+      // Show error to user
+      alert(`Donation error: ${error.message || 'Could not process donation. Please try again.'}`);
+    } finally {
+      setIsProcessing(false);
     }
-  }, [team.id]);
+  };
 
   return (
     <Card>
@@ -218,25 +390,32 @@ const TeamCard = ({ team, donationUrl }) => {
       <TeamName>{team.name}</TeamName>
       <CharityName>{team.charityName}</CharityName>
       <DonationInfo>
-        <DonationAmount teamColor={team.teamColor} isLoading={isLoading}>
+        <DonationAmount $teamColor={team.teamColor} $isLoading={isLoading}>
           {isLoading ? (
             <LoadingContainer>
-              <Spinner color={team.teamColor} />
-              Loading...
+              <Spinner color={team.teamColor} size="2rem" />
             </LoadingContainer>
+          ) : error ? (
+            <span style={{ fontSize: '1rem', color: 'red' }}>Error loading donations</span>
           ) : (
-            formatNumber(donationTotal ?? team.donationTotal)
+            <>
+              <span className="currency">$</span>
+              <AnimatedValue
+                key={`donation-${team.id}-${animationKeyRef.current}`}
+                value={formatNumber(donationTotal)}
+                teamColor={team.teamColor}
+              />
+            </>
           )}
         </DonationAmount>
         <DonationLabel>Raised</DonationLabel>
       </DonationInfo>
       <DonateButton 
-        href={donationUrl} 
-        target="_blank" 
-        rel="noopener noreferrer"
-        teamColor={team.teamColor}
+        onClick={handleDonateClick}
+        disabled={isProcessing}
+        $teamColor={team.teamColor}
       >
-        Donate Now
+        {isProcessing ? 'Processing...' : 'Donate Now'}
       </DonateButton>
     </Card>
   );
