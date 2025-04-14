@@ -122,13 +122,17 @@ export default async function handler(req, res) {
 
             const currentData = docSnapshot.data();
             const currentTotal = currentData.donationTotal || 0;
-            const newTotal = currentTotal + amount;
+            
+            // Make sure we're always dealing with integer amounts
+            const intAmount = Math.round(amount);
+            const newTotal = currentTotal + intAmount;
 
             console.log('📝 Updating donation total:', {
               teamId,
               documentId: teamDoc.id,
               currentTotal,
               amount,
+              roundedAmount: intAmount,
               newTotal
             });
 
