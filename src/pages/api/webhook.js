@@ -25,228 +25,231 @@ export const config = {
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-// Helper function to check if a session has already been processed
-async function hasSessionBeenProcessed(sessionId) {
+const handleCheckoutSession = async (session) => {
+  console.log(`Starting to process checkout session ${session.id}`);
+  
   try {
-    // Check the 'processed_sessions' collection to see if this session ID exists
-    const sessionsRef = db.collection('processed_sessions');
-    const docRef = sessionsRef.doc(sessionId);
-    const doc = await docRef.get();
+    // Check if session has already been processed
+    const processedSessionsRef = db.collection('processedSessions');
+    const existingSessionDoc = await processedSessionsRef.doc(session.id).get();
     
-    return doc.exists;
+    if (existingSessionDoc.exists) {
+      console.log(`Session ${session.id} has already been processed`);
+      return { 
+        success: true,
+        alreadyProcessed: true,
+        sessionId: session.id
+      };
+    }
+    
+    // Validate session metadata
+    if (!session.metadata || !session.metadata.teamId) {
+      console.error('Missing teamId in session metadata:', session.metadata);
+      return {
+        success: false,
+        reason: 'missing_team_id',
+        sessionId: session.id
+      };
+    }
+    
+    const teamId = session.metadata.teamId;
+    
+    // Get team data
+    const teamRef = db.collection('teams').doc(teamId);
+    const teamDoc = await teamRef.get();
+    
+    if (!teamDoc.exists) {
+      console.error(`Team with ID ${teamId} not found`);
+      return {
+        success: false,
+        reason: 'team_not_found',
+        teamId: teamId,
+        sessionId: session.id
+      };
+    }
+    
+    const teamData = teamDoc.data();
+    
+    // Calculate the donation amount (convert from cents to dollars)
+    const amount = session.amount_total / 100;
+    
+    if (!amount || amount <= 0) {
+      console.error(`Invalid donation amount: ${amount}`);
+      return {
+        success: false,
+        reason: 'invalid_amount',
+        amount: amount,
+        teamId: teamId,
+        teamName: teamData.name,
+        sessionId: session.id
+      };
+    }
+    
+    // Update team's donation total
+    try {
+      await teamRef.update({
+        donationTotal: admin.firestore.FieldValue.increment(amount),
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp()
+      });
+      console.log(`Updated team ${teamId} donation total with amount ${amount}`);
+    } catch (error) {
+      console.error(`Error updating team ${teamId} donation total:`, error);
+      return {
+        success: false,
+        reason: 'team_update_failed',
+        error: error.message,
+        teamId: teamId,
+        teamName: teamData.name,
+        amount: amount,
+        sessionId: session.id
+      };
+    }
+    
+    // Add donation record
+    try {
+      await db.collection('donations').add({
+        teamId: teamId,
+        amount: amount,
+        sessionId: session.id,
+        customerId: session.customer || null,
+        customerEmail: session.customer_details?.email || null,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+      console.log(`Added donation record for team ${teamId}`);
+    } catch (error) {
+      // Log but don't fail the process if donation record creation fails
+      console.error('Error adding donation record:', error);
+      // We continue processing since the team total was already updated
+    }
+    
+    // Mark session as processed
+    try {
+      await processedSessionsRef.doc(session.id).set({
+        teamId: teamId,
+        amount: amount,
+        processedAt: admin.firestore.FieldValue.serverTimestamp(),
+        metadata: session.metadata || {},
+        customer: session.customer || null
+      });
+      console.log(`Marked session ${session.id} as processed`);
+    } catch (error) {
+      console.error('Error marking session as processed:', error);
+      // Continue processing since the critical operations were completed
+    }
+    
+    return {
+      success: true,
+      teamId: teamId,
+      teamName: teamData.name,
+      amount: amount,
+      sessionId: session.id,
+      customerEmail: session.customer_details?.email || null
+    };
   } catch (error) {
-    console.error('Error checking processed sessions:', error);
-    // If there's an error, assume it hasn't been processed to avoid missing payments
-    return false;
+    console.error(`Error processing checkout session ${session.id}:`, error);
+    return {
+      success: false,
+      reason: 'processing_error',
+      error: error.message,
+      sessionId: session.id
+    };
   }
-}
+};
 
-// Helper function to mark a session as processed
-async function markSessionAsProcessed(sessionId, teamId, amount, session) {
-  try {
-    const sessionsRef = db.collection('processed_sessions');
-    await sessionsRef.doc(sessionId).set({
-      processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      teamId,
-      amount,
-      amountInCents: session.amount_total,
-      calculatedAmount: Math.floor(session.amount_total / 100),
-      paymentStatus: session.payment_status,
-      customerEmail: session.customer_details?.email || 'unknown',
-      processedCount: admin.firestore.FieldValue.increment(1)
-    });
-    console.log('✅ Session marked as processed:', sessionId);
-    return true;
-  } catch (error) {
-    console.error('Error marking session as processed:', error);
-    return false;
-  }
-}
-
-export default async function handler(req, res) {
+const handler = async (req, res) => {
   if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  console.log('🚀 Received webhook request');
-  const sig = req.headers['stripe-signature'];
-  console.log('🔑 Stripe signature:', sig);
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error('STRIPE_WEBHOOK_SECRET is not defined');
+    return res.status(500).json({ error: 'Webhook secret is not configured' });
+  }
 
   try {
-    const buf = await buffer(req);
-    console.log('📦 Request body length:', buf.length);
+    // Get the signature sent by Stripe
+    const signature = req.headers['stripe-signature'];
+    if (!signature) {
+      console.error('No Stripe signature found in request headers');
+      return res.status(400).json({ error: 'No Stripe signature found' });
+    }
 
-    const event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
-    console.log('✅ Webhook event verified:', event.type);
+    let event;
+    try {
+      const rawBody = await buffer(req);
+      event = stripe.webhooks.constructEvent(
+        rawBody,
+        signature,
+        webhookSecret
+      );
+    } catch (err) {
+      console.error(`Webhook signature verification failed: ${err.message}`);
+      return res.status(400).json({ error: `Webhook Error: ${err.message}` });
+    }
 
+    // Handle the event
+    console.log(`Received Stripe event: ${event.type}`);
+
+    // Handle the checkout.session.completed event
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-      const { teamId } = session.metadata;
       
-      // The issue might be here - let's log the raw amount and double-check the conversion
-      const amountInCents = session.amount_total;
-      const amount = Math.floor(amountInCents / 100); // Convert from cents to dollars with explicit floor
-      const sessionId = session.id;
-      
-      // Get the original selected amount from metadata if available
-      const originalSelectedAmount = session.metadata?.selectedAmount ? 
-        parseInt(session.metadata.selectedAmount, 10) : null;
-      
-      // If line items are available, check if quantity might be affecting the amount
-      let lineItems = [];
+      // Record webhook receipt in Firestore for audit purposes
       try {
-        if (session.line_items) {
-          lineItems = session.line_items;
-        } else {
-          // Try to fetch line items if they're not included in the webhook
-          const lineItemsResponse = await stripe.checkout.sessions.listLineItems(sessionId);
-          lineItems = lineItemsResponse.data;
-        }
-      } catch (error) {
-        console.log('Failed to get line items:', error.message);
-      }
-      
-      // Calculate what the amount should be based on line items
-      let calculatedAmount = 0;
-      if (lineItems.length > 0) {
-        lineItems.forEach(item => {
-          const itemAmount = (item.amount_total || item.price.unit_amount * item.quantity) / 100;
-          calculatedAmount += itemAmount;
+        await db.collection('webhookEvents').add({
+          eventId: event.id,
+          eventType: event.type,
+          sessionId: session.id,
+          received: admin.firestore.FieldValue.serverTimestamp(),
+          metadata: session.metadata || {}
         });
+      } catch (logError) {
+        console.error('Failed to log webhook event:', logError);
+        // Continue processing even if logging fails
       }
 
-      console.log('💰 Processing completed checkout:', {
-        sessionId,
-        teamId,
-        rawAmountFromStripe: session.amount_total,
-        amountInCents,
-        convertedAmountInDollars: amount,
-        originalSelectedAmount,
-        metadata: session.metadata,
-        divisionCheck: `${session.amount_total} / 100 = ${session.amount_total / 100}`,
-        lineItems: lineItems.map(item => ({
-          quantity: item.quantity,
-          amount: item.amount_total / 100 || (item.price?.unit_amount || 0) * item.quantity / 100
-        })),
-        calculatedAmountFromLineItems: calculatedAmount,
-      });
-
-      // Check if this session has already been processed
-      const alreadyProcessed = await hasSessionBeenProcessed(sessionId);
-      if (alreadyProcessed) {
-        console.log('⚠️ Session already processed, skipping:', sessionId);
+      // Process the checkout session
+      console.log(`Processing checkout session ${session.id}`);
+      const result = await handleCheckoutSession(session);
+      
+      if (result.error) {
+        console.error(`Error processing checkout session: ${result.error}`);
+        // We still return 200 to acknowledge receipt to Stripe
         return res.status(200).json({ 
-          received: true,
-          processed: false,
-          reason: 'Session already processed'
+          received: true, 
+          processed: false, 
+          error: result.error 
         });
       }
-
-      try {
-        // Find the team document by id field
-        const teamsRef = db.collection('teams');
-        const querySnapshot = await teamsRef.where('id', '==', teamId).get();
-        console.log('🔍 Query results:', querySnapshot.size, 'documents found');
-
-        if (querySnapshot.empty) {
-          throw new Error(`Team not found with id: ${teamId}`);
-        }
-
-        const teamDoc = querySnapshot.docs[0];
-        console.log('🏒 Found team document:', teamDoc.id, 'with data:', teamDoc.data());
-
-        // Update the donation total using a transaction
-        const result = await db.runTransaction(async (transaction) => {
-          try {
-            const docSnapshot = await transaction.get(teamDoc.ref);
-            if (!docSnapshot.exists) {
-              throw new Error('Document does not exist!');
-            }
-
-            const currentData = docSnapshot.data();
-            const currentTotal = currentData.donationTotal || 0;
-            
-            // Make sure we're always dealing with integer amounts
-            let intAmount = Math.round(amount);
-            
-            // If we have the original selected amount from metadata, use that
-            if (originalSelectedAmount !== null) {
-              console.log('📊 Using original selected amount from metadata:', originalSelectedAmount);
-              intAmount = originalSelectedAmount;
-            }
-            // Special handling for the $25 donation case that's increasing by $100
-            else if (amountInCents === 2500 || Math.abs(amountInCents - 2500) < 1) {
-              console.log('🧐 Detected $25 donation, forcing exact amount');
-              intAmount = 25; // Force it to be exactly $25
-            }
-            
-            // IMPORTANT: We are allowing only the exact intended donation amount
-            // and preventing any multiplication or doubling
-            const newTotal = currentTotal + intAmount;
-
-            console.log('📝 Updating donation total:', {
-              teamId,
-              documentId: teamDoc.id,
-              currentTotal,
-              rawAmount: amount,
-              amountInCents,
-              finalAmountToAdd: intAmount,
-              newTotal
-            });
-
-            transaction.update(teamDoc.ref, {
-              donationTotal: newTotal,
-              lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-            });
-
-            return { currentTotal, newTotal, success: true };
-          } catch (error) {
-            console.error('❌ Error in transaction:', error);
-            return { success: false, error: error.message };
-          }
+      
+      if (result.alreadyProcessed) {
+        console.log(`Session ${session.id} already processed, skipping`);
+        return res.status(200).json({ 
+          received: true, 
+          processed: false, 
+          alreadyProcessed: true 
         });
-
-        if (!result.success) {
-          throw new Error(`Transaction failed: ${result.error}`);
-        }
-
-        // Mark this session as processed to prevent duplicate processing
-        await markSessionAsProcessed(sessionId, teamId, amount, session);
-
-        console.log('🎉 Successfully updated donation total in Firebase:', result);
-        
-        // Let's log all docs in the 'teams' collection to verify the update
-        const allTeams = await db.collection('teams').get();
-        console.log(`📊 Current teams collection (${allTeams.size} docs):`);
-        allTeams.forEach(doc => {
-          console.log(`Team ${doc.id}:`, doc.data());
-        });
-        
-        res.status(200).json({ 
-          received: true,
-          updated: true,
-          result
-        });
-      } catch (error) {
-        console.error('❌ Error updating Firebase:', error);
-        console.error('Error details:', {
-          message: error.message,
-          code: error.code,
-          stack: error.stack
-        });
-        return res.status(500).json({ message: error.message });
       }
+      
+      console.log(`Successfully processed session ${session.id} for team ${result.teamName}`);
+      return res.status(200).json({ 
+        received: true, 
+        processed: true,
+        teamName: result.teamName,
+        teamId: result.teamId,
+        donationAmount: result.amount,
+        sessionId: result.sessionId
+      });
     } else {
-      console.log('⏭️ Ignoring non-checkout event:', event.type);
-      res.status(200).json({ received: true });
+      // For other event types, just acknowledge receipt
+      console.log(`Unhandled event type: ${event.type}`);
+      return res.status(200).json({ received: true, processed: false, eventType: event.type });
     }
-  } catch (error) {
-    console.error('❌ Webhook error:', error);
-    console.error('Error details:', {
-      message: error.message,
-      code: error.code,
-      stack: error.stack
-    });
-    res.status(400).json({ message: error.message });
+  } catch (err) {
+    console.error(`Webhook handler error: ${err.message}`);
+    return res.status(500).json({ error: `Webhook handler error: ${err.message}` });
   }
-} 
+};
+
+export default handler; 
