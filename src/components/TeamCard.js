@@ -342,7 +342,7 @@ const TeamCard = ({ team }) => {
         body: JSON.stringify({
           teamId: team.id,
           charityName: team.charityName,
-          amount: amount,
+          selectedAmount: amount,
         }),
       });
 
@@ -362,20 +362,28 @@ const TeamCard = ({ team }) => {
         // Check for specific Stripe configuration error
         if (errorData.message === 'Stripe configuration error') {
           throw new Error('Payment processing is currently unavailable. Please try again later or contact support.');
-        } else if (errorData.error && errorData.error.includes('API Key')) {
+        } else if (errorData.error && typeof errorData.error === 'object' && errorData.error.message) {
+          // Handle structured error objects
+          throw new Error(errorData.error.message);
+        } else if (errorData.error && typeof errorData.error === 'string' && errorData.error.includes('API Key')) {
+          // Handle string error containing 'API Key'
           throw new Error('Payment system configuration error. Please notify the site administrator.');
         } else {
-          throw new Error(errorData.message || `API error: ${response.status}`);
+          // Fallback error handling
+          const errorMessage = errorData.message || 
+                              (errorData.error && typeof errorData.error === 'string' ? errorData.error : null) || 
+                              `API error: ${response.status}`;
+          throw new Error(errorMessage);
         }
       }
 
       const data = await response.json();
       console.log('Checkout session data received:', { 
-        hasSessionId: !!data.sessionId,
-        sessionIdLength: data.sessionId ? data.sessionId.length : 0 
+        hasId: !!data.id,
+        sessionId: data.id || 'none' 
       });
       
-      if (!data.sessionId) {
+      if (!data.id) {
         throw new Error('No session ID returned from API');
       }
       
@@ -400,7 +408,7 @@ const TeamCard = ({ team }) => {
         console.log('Redirecting to checkout with session ID');
         // Redirect to Checkout
         const { error } = await stripe.redirectToCheckout({
-          sessionId: data.sessionId,
+          sessionId: data.id,
         });
 
         if (error) {
