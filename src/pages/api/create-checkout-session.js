@@ -49,6 +49,12 @@ export default async function handler(req, res) {
     
     console.log('Creating checkout session for:', { teamId, amount, charityName });
 
+    // Ensure we have a proper URL with protocol
+    const origin = req.headers.origin || 
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://nhl-charity-faceoff.vercel.app');
+    
+    console.log('Using origin for URLs:', origin);
+
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -68,8 +74,8 @@ export default async function handler(req, res) {
         },
       ],
       mode: 'payment',
-      success_url: `${req.headers.origin}/donation-success?session_id={CHECKOUT_SESSION_ID}&team=${teamId}`,
-      cancel_url: `${req.headers.origin}`,
+      success_url: `${origin}/donation-success?session_id={CHECKOUT_SESSION_ID}&team=${teamId}`,
+      cancel_url: `${origin}`,
       metadata: {
         teamId,
         charityName,
