@@ -43,102 +43,64 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { amount, teamId, charityName } = req.body;
+    // Validate and process the request body
+    const { teamId, charityName, selectedAmount } = req.body;
     
-    // Validate required parameters
-    if (!amount || !teamId || !charityName) {
-      console.error('Missing required parameters', { amount, teamId, charityName });
+    if (!teamId || !charityName || !selectedAmount) {
       return res.status(400).json({ 
-        message: 'Missing required parameters',
-        required: ['amount', 'teamId', 'charityName'],
-        received: { amount, teamId, charityName }
+        error: {
+          message: 'Missing required fields: teamId, charityName, and selectedAmount are required'
+        }
       });
     }
     
-    // Ensure amount is a number and properly formatted
-    const numericAmount = typeof amount === 'string' ? parseInt(amount, 10) : amount;
-    
-    if (isNaN(numericAmount) || numericAmount <= 0) {
-      console.error('Invalid amount', { amount, numericAmount });
-      return res.status(400).json({
-        message: 'Invalid amount',
-        received: { amount, parsed: numericAmount }
+    // Check if Stripe API key is configured
+    if (!process.env.STRIPE_SECRET_KEY) {
+      console.error('STRIPE_SECRET_KEY environment variable is not set');
+      return res.status(500).json({
+        error: {
+          message: 'Stripe configuration error. Please contact support.'
+        }
       });
     }
     
-    // Log the exact amount being processed
-    console.log('Creating checkout session for:', { 
-      teamId, 
-      rawAmount: amount,
-      numericAmount,
-      amountInCents: numericAmount * 100,
-      amountType: typeof amount,
-      charityName 
-    });
-
-    // Ensure we have a proper URL with protocol
-    let origin = req.headers.origin;
-    
-    // If origin is missing or contains "vercel", use the production URL
-    if (!origin || origin.includes("vercel.app")) {
-      // Always default to production URL for checkout redirects
-      origin = 'https://nhl-charity-faceoff.vercel.app';
-    }
-    
-    console.log('Using origin for URLs:', origin);
-
-    // Create Stripe checkout session
+    // Create checkout session with Stripe
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
-      submit_type: 'donate',
       line_items: [
         {
           price_data: {
             currency: 'usd',
             product_data: {
               name: `Donation to ${charityName}`,
-              description: 'NHL Playoff Charity Challenge',
-              images: ['https://nhl-charity-faceoff.vercel.app/logo.png'],
+              description: 'NHL Charity Faceoff donation',
             },
-            unit_amount_decimal: numericAmount * 100, // Convert to cents using numericAmount
+            unit_amount: parseInt(selectedAmount) * 100, // Convert to cents
           },
           quantity: 1,
         },
       ],
       mode: 'payment',
-      success_url: getAbsoluteUrl(`/donation-success?session_id={CHECKOUT_SESSION_ID}&team=${teamId}`),
-      cancel_url: getAbsoluteUrl('/'),
+      success_url: `${req.headers.origin}/?donation=success&team=${teamId}&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${req.headers.origin}/`,
       metadata: {
         teamId,
         charityName,
-        selectedAmount: numericAmount.toString(),
-      },
-      billing_address_collection: 'auto',
-      custom_text: {
-        submit: {
-          message: 'Your donation helps the charity of your rival team!',
-        },
-      },
-      payment_intent_data: {
-        description: `Donation to ${charityName} - NHL Charity Faceoff`,
-        metadata: {
-          teamId,
-          charityName,
-        },
+        selectedAmount,
       },
     });
 
-    console.log('Checkout session created:', session.id);
-    res.status(200).json({ sessionId: session.id });
+    res.status(200).json({ id: session.id });
   } catch (error) {
     console.error('Error creating checkout session:', error);
+    const errorMessage = error.message || 'An unknown error occurred';
+    const statusCode = error.statusCode || 500;
     
-    // Include detailed error information
-    res.status(500).json({ 
-      message: 'Error creating checkout session',
-      error: error.message,
-      type: error.type || 'unknown',
-      code: error.statusCode || 500
+    res.status(statusCode).json({
+      error: {
+        message: errorMessage
+      }
     });
   }
 } 
