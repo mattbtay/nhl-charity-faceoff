@@ -87,7 +87,6 @@ export default async function handler(req, res) {
           charityName,
         },
       },
-      allow_promotion_codes: true,
     });
 
     console.log('Checkout session created:', session.id);
