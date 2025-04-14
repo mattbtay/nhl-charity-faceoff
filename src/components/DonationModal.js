@@ -227,6 +227,13 @@ const DonationModal = ({
       return;
     }
     
+    console.log('DonationModal: Selected donation amount:', {
+      isCustom,
+      customAmount: customAmount ? parseInt(customAmount, 10) : null,
+      selectedAmount,
+      finalAmount
+    });
+    
     onDonate(finalAmount);
   };
 

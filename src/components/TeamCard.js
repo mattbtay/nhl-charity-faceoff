@@ -318,10 +318,13 @@ const TeamCard = ({ team }) => {
       
       // Add detailed logging
       console.log('=== DONATION FLOW START ===');
-      console.log('TeamCard: Donation initiated', { 
+      console.log('TeamCard: Donation initiated with exact amount:', amount, typeof amount);
+      console.log('TeamCard: Full donation details', { 
         teamId: team.id, 
         charityName: team.charityName,
         amount,
+        amountType: typeof amount,
+        amountToJson: JSON.stringify(amount),
         environment: {
           hasPublishableKey: !!process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
           publishableKeyFirstChars: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ? 

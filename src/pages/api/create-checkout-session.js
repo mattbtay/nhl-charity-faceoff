@@ -55,7 +55,26 @@ export default async function handler(req, res) {
       });
     }
     
-    console.log('Creating checkout session for:', { teamId, amount, charityName });
+    // Ensure amount is a number and properly formatted
+    const numericAmount = typeof amount === 'string' ? parseInt(amount, 10) : amount;
+    
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      console.error('Invalid amount', { amount, numericAmount });
+      return res.status(400).json({
+        message: 'Invalid amount',
+        received: { amount, parsed: numericAmount }
+      });
+    }
+    
+    // Log the exact amount being processed
+    console.log('Creating checkout session for:', { 
+      teamId, 
+      rawAmount: amount,
+      numericAmount,
+      amountInCents: numericAmount * 100,
+      amountType: typeof amount,
+      charityName 
+    });
 
     // Ensure we have a proper URL with protocol
     let origin = req.headers.origin;
@@ -81,7 +100,7 @@ export default async function handler(req, res) {
               description: 'NHL Playoff Charity Challenge',
               images: ['https://nhl-charity-faceoff.vercel.app/logo.png'],
             },
-            unit_amount_decimal: amount * 100, // Convert to cents
+            unit_amount_decimal: numericAmount * 100, // Convert to cents using numericAmount
           },
           quantity: 1,
         },
@@ -92,6 +111,7 @@ export default async function handler(req, res) {
       metadata: {
         teamId,
         charityName,
+        selectedAmount: numericAmount.toString(),
       },
       billing_address_collection: 'auto',
       custom_text: {

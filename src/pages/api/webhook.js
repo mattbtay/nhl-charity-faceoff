@@ -88,6 +88,10 @@ export default async function handler(req, res) {
       const amount = Math.floor(amountInCents / 100); // Convert from cents to dollars with explicit floor
       const sessionId = session.id;
       
+      // Get the original selected amount from metadata if available
+      const originalSelectedAmount = session.metadata?.selectedAmount ? 
+        parseInt(session.metadata.selectedAmount, 10) : null;
+      
       // If line items are available, check if quantity might be affecting the amount
       let lineItems = [];
       try {
@@ -117,13 +121,14 @@ export default async function handler(req, res) {
         rawAmountFromStripe: session.amount_total,
         amountInCents,
         convertedAmountInDollars: amount,
+        originalSelectedAmount,
+        metadata: session.metadata,
         divisionCheck: `${session.amount_total} / 100 = ${session.amount_total / 100}`,
         lineItems: lineItems.map(item => ({
           quantity: item.quantity,
           amount: item.amount_total / 100 || (item.price?.unit_amount || 0) * item.quantity / 100
         })),
         calculatedAmountFromLineItems: calculatedAmount,
-        metadata: session.metadata
       });
 
       // Check if this session has already been processed
@@ -164,8 +169,13 @@ export default async function handler(req, res) {
             // Make sure we're always dealing with integer amounts
             let intAmount = Math.round(amount);
             
+            // If we have the original selected amount from metadata, use that
+            if (originalSelectedAmount !== null) {
+              console.log('📊 Using original selected amount from metadata:', originalSelectedAmount);
+              intAmount = originalSelectedAmount;
+            }
             // Special handling for the $25 donation case that's increasing by $100
-            if (amountInCents === 2500 || Math.abs(amountInCents - 2500) < 1) {
+            else if (amountInCents === 2500 || Math.abs(amountInCents - 2500) < 1) {
               console.log('🧐 Detected $25 donation, forcing exact amount');
               intAmount = 25; // Force it to be exactly $25
             }
