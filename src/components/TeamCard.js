@@ -306,6 +306,18 @@ const TeamCard = ({ team }) => {
     try {
       setIsProcessing(true);
       
+      // Add detailed logging
+      console.log('=== DONATION FLOW START ===');
+      console.log('TeamCard: Donation button clicked', { 
+        teamId: team.id, 
+        charityName: team.charityName,
+        environment: {
+          hasPublishableKey: !!process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+          publishableKeyFirstChars: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ? 
+            process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.substring(0, 7) : 'none'
+        }
+      });
+      
       // Create a checkout session
       console.log(`Initiating donation for team: ${team.id}, charity: ${team.charityName}`);
       const response = await fetch('/api/create-checkout-session', {
@@ -320,8 +332,17 @@ const TeamCard = ({ team }) => {
         }),
       });
 
+      console.log('API response received:', { 
+        status: response.status, 
+        ok: response.ok,
+        statusText: response.statusText
+      });
+
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await response.json().catch(e => {
+          console.error('Failed to parse error response:', e);
+          return {};
+        });
         console.error('Checkout session creation failed:', response.status, errorData);
         
         // Check for specific Stripe configuration error
@@ -335,23 +356,34 @@ const TeamCard = ({ team }) => {
       }
 
       const data = await response.json();
+      console.log('Checkout session data received:', { 
+        hasSessionId: !!data.sessionId,
+        sessionIdLength: data.sessionId ? data.sessionId.length : 0 
+      });
       
       if (!data.sessionId) {
         throw new Error('No session ID returned from API');
       }
       
-      console.log('Checkout session created, redirecting to Stripe');
+      console.log('Checkout session created, getting Stripe instance');
 
       // Get Stripe.js instance
+      console.log('Getting Stripe promise...');
       const stripe = await stripePromise;
+      console.log('Stripe promise resolved:', { 
+        stripeAvailable: !!stripe,
+        stripeType: typeof stripe
+      });
       
       // Check if Stripe is properly initialized
       if (!stripe) {
+        console.error('Stripe is not available!');
         throw new Error('Payment system is not available. Please check that the NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY environment variable is set.');
       }
 
       // Safely handle the redirectToCheckout call
       try {
+        console.log('Redirecting to checkout with session ID');
         // Redirect to Checkout
         const { error } = await stripe.redirectToCheckout({
           sessionId: data.sessionId,
@@ -366,11 +398,18 @@ const TeamCard = ({ team }) => {
         throw new Error('Could not open payment page. Please ensure cookies are enabled and try again.');
       }
     } catch (error) {
+      console.error('=== DONATION FLOW ERROR ===');
       console.error('Error initiating donation:', error);
+      console.error('Error details:', { 
+        message: error.message,
+        stack: error.stack,
+        name: error.name 
+      });
       setError(error);
       // Show error to user
       alert(`Donation error: ${error.message || 'Could not process donation. Please try again.'}`);
     } finally {
+      console.log('=== DONATION FLOW END ===');
       setIsProcessing(false);
     }
   };
