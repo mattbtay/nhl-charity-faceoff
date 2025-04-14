@@ -52,6 +52,7 @@ export default async function handler(req, res) {
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
+      submit_type: 'donate',
       line_items: [
         {
           price_data: {
@@ -59,15 +60,11 @@ export default async function handler(req, res) {
             product_data: {
               name: `Donation to ${charityName}`,
               description: 'NHL Playoff Charity Challenge',
+              images: ['https://nhl-charity-faceoff.vercel.app/logo.png'],
             },
-            unit_amount: amount * 100, // Convert to cents
+            unit_amount_decimal: amount * 100, // Convert to cents
           },
           quantity: 1,
-          adjustable_quantity: {
-            enabled: true,
-            minimum: 1,
-            maximum: 99,
-          },
         },
       ],
       mode: 'payment',
@@ -80,9 +77,17 @@ export default async function handler(req, res) {
       billing_address_collection: 'auto',
       custom_text: {
         submit: {
-          message: 'Your donation supports the charity of your rival team!',
+          message: 'Your donation helps the charity of your rival team!',
         },
       },
+      payment_intent_data: {
+        description: `Donation to ${charityName} - NHL Charity Faceoff`,
+        metadata: {
+          teamId,
+          charityName,
+        },
+      },
+      allow_promotion_codes: true,
     });
 
     console.log('Checkout session created:', session.id);

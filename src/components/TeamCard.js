@@ -4,6 +4,7 @@ import styled, { keyframes, css } from 'styled-components';
 import { subscribeToDonationTotals } from '../config/firebase';
 import Spinner from './Spinner';
 import stripePromise from '../config/stripe';
+import DonationModal from './DonationModal';
 
 const Card = styled.div`
   display: flex;
@@ -250,6 +251,7 @@ const TeamCard = ({ team }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showDonationModal, setShowDonationModal] = useState(false);
   const previousTotalRef = useRef(team.donationTotal || 0);
   const forceUpdate = useRef(0);
   const animationKeyRef = useRef(Date.now());
@@ -302,15 +304,24 @@ const TeamCard = ({ team }) => {
     };
   }, [team.id]);
 
-  const handleDonateClick = async () => {
+  const handleDonateClick = () => {
+    setShowDonationModal(true);
+  };
+
+  const handleModalClose = () => {
+    setShowDonationModal(false);
+  };
+
+  const processCheckout = async (amount) => {
     try {
       setIsProcessing(true);
       
       // Add detailed logging
       console.log('=== DONATION FLOW START ===');
-      console.log('TeamCard: Donation button clicked', { 
+      console.log('TeamCard: Donation initiated', { 
         teamId: team.id, 
         charityName: team.charityName,
+        amount,
         environment: {
           hasPublishableKey: !!process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
           publishableKeyFirstChars: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ? 
@@ -319,7 +330,7 @@ const TeamCard = ({ team }) => {
       });
       
       // Create a checkout session
-      console.log(`Initiating donation for team: ${team.id}, charity: ${team.charityName}`);
+      console.log(`Initiating donation for team: ${team.id}, charity: ${team.charityName}, amount: $${amount}`);
       const response = await fetch('/api/create-checkout-session', {
         method: 'POST',
         headers: {
@@ -328,7 +339,7 @@ const TeamCard = ({ team }) => {
         body: JSON.stringify({
           teamId: team.id,
           charityName: team.charityName,
-          amount: 25, // $25 default donation amount (user can adjust in Stripe)
+          amount: amount,
         }),
       });
 
@@ -411,52 +422,63 @@ const TeamCard = ({ team }) => {
     } finally {
       console.log('=== DONATION FLOW END ===');
       setIsProcessing(false);
+      setShowDonationModal(false);
     }
   };
 
   return (
-    <Card>
-      <LogoContainer>
-        <Image
-          src={team.logo}
-          alt={`${team.name} logo`}
-          fill
-          sizes="(max-width: 320px) 160px"
-          style={{ objectFit: 'contain' }}
-          priority
-        />
-      </LogoContainer>
-      <TeamName>{team.name}</TeamName>
-      <CharityName>{team.charityName}</CharityName>
-      <DonationInfo>
-        <DonationAmount $teamColor={team.teamColor} $isLoading={isLoading}>
-          {isLoading ? (
-            <LoadingContainer>
-              <Spinner color={team.teamColor} size="2rem" />
-            </LoadingContainer>
-          ) : error ? (
-            <span style={{ fontSize: '1rem', color: 'red' }}>Error loading donations</span>
-          ) : (
-            <>
-              <span className="currency">$</span>
-              <AnimatedValue
-                key={`donation-${team.id}-${animationKeyRef.current}`}
-                value={formatNumber(donationTotal)}
-                teamColor={team.teamColor}
-              />
-            </>
-          )}
-        </DonationAmount>
-        <DonationLabel>Raised</DonationLabel>
-      </DonationInfo>
-      <DonateButton 
-        onClick={handleDonateClick}
-        disabled={isProcessing}
-        $teamColor={team.teamColor}
-      >
-        {isProcessing ? 'Processing...' : 'Donate Now'}
-      </DonateButton>
-    </Card>
+    <>
+      <Card>
+        <LogoContainer>
+          <Image
+            src={team.logo}
+            alt={`${team.name} logo`}
+            fill
+            sizes="(max-width: 320px) 160px"
+            style={{ objectFit: 'contain' }}
+            priority
+          />
+        </LogoContainer>
+        <TeamName>{team.name}</TeamName>
+        <CharityName>{team.charityName}</CharityName>
+        <DonationInfo>
+          <DonationAmount $teamColor={team.teamColor} $isLoading={isLoading}>
+            {isLoading ? (
+              <LoadingContainer>
+                <Spinner color={team.teamColor} size="2rem" />
+              </LoadingContainer>
+            ) : error ? (
+              <span style={{ fontSize: '1rem', color: 'red' }}>Error loading donations</span>
+            ) : (
+              <>
+                <span className="currency">$</span>
+                <AnimatedValue
+                  key={`donation-${team.id}-${animationKeyRef.current}`}
+                  value={formatNumber(donationTotal)}
+                  teamColor={team.teamColor}
+                />
+              </>
+            )}
+          </DonationAmount>
+          <DonationLabel>Raised</DonationLabel>
+        </DonationInfo>
+        <DonateButton 
+          onClick={handleDonateClick}
+          disabled={isProcessing}
+          $teamColor={team.teamColor}
+        >
+          {isProcessing ? 'Processing...' : 'Donate Now'}
+        </DonateButton>
+      </Card>
+
+      <DonationModal 
+        isOpen={showDonationModal}
+        onClose={handleModalClose}
+        team={team}
+        onDonate={processCheckout}
+        isProcessing={isProcessing}
+      />
+    </>
   );
 };
 
