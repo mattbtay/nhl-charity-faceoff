@@ -128,6 +128,7 @@ export default function Home() {
   const [isToastClosing, setIsToastClosing] = useState(false);
   const [donatedTeam, setDonatedTeam] = useState(null);
   const [showTestUpdater, setShowTestUpdater] = useState(false);
+  const [processedDonations, setProcessedDonations] = useState(new Set());
   const router = useRouter();
   const activeMatchups = matchups.filter(matchup => matchup.active);
 
@@ -145,7 +146,18 @@ export default function Home() {
 
   useEffect(() => {
     if (router.query.donation === 'success' && router.query.team) {
-      // Look up the team by ID rather than assuming it's a key in the teams object
+      // Check session ID to avoid duplicate toasts
+      const sessionId = router.query.session_id || 'unknown';
+      
+      // If we've already processed this donation, don't show toast again
+      if (processedDonations.has(sessionId)) {
+        console.log('🔄 Already processed donation session:', sessionId);
+        // Still remove query params if they somehow got added back
+        router.replace('/', undefined, { shallow: true });
+        return;
+      }
+      
+      // Look up the team by ID
       const teamId = router.query.team;
       console.log('🔍 Looking for team with ID:', teamId);
       
@@ -158,17 +170,39 @@ export default function Home() {
       });
       
       if (foundTeam) {
-        console.log('✅ Found team for donation success:', foundTeam.name);
+        console.log('✅ Found team for donation success:', foundTeam.name, 'Session:', sessionId);
+        
+        // Mark this donation as processed
+        setProcessedDonations(prev => new Set(prev).add(sessionId));
+        
+        // Show the toast
         setDonatedTeam(foundTeam);
         setShowToast(true);
+        setIsToastClosing(false);
         
-        // Remove the query parameters
-        router.replace('/', undefined, { shallow: true });
+        // Remove the query parameters - important to prevent reappearing toast
+        router.replace('/', undefined, { shallow: true }).then(() => {
+          console.log('URL parameters removed successfully');
+        }).catch(err => {
+          console.error('Failed to remove URL parameters:', err);
+        });
       } else {
         console.error('❌ Could not find team with ID:', teamId);
+        // Still clean up the URL
+        router.replace('/', undefined, { shallow: true });
       }
     }
-  }, [router.query]);
+  }, [router.query, processedDonations]);
+
+  const handleToastClose = () => {
+    console.log('📣 Toast closing handler called');
+    setIsToastClosing(true);
+    setTimeout(() => {
+      setShowToast(false);
+      setIsToastClosing(false);
+      setDonatedTeam(null);
+    }, 500);
+  };
 
   return (
     <Layout>
@@ -178,11 +212,7 @@ export default function Home() {
           color={donatedTeam.teamColor}
           isClosing={isToastClosing}
           duration={5000}
-          onClose={() => {
-            setShowToast(false);
-            setIsToastClosing(false);
-            setDonatedTeam(null);
-          }}
+          onClose={handleToastClose}
         />
       )}
       {showTestUpdater && <TestUpdater />}

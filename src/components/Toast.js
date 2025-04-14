@@ -89,13 +89,17 @@ const Toast = ({ message, color, isClosing, duration = 5000, onClose }) => {
     let dismissTimer;
     let closeTimer;
     
+    // Only set timer if toast is visible and not already closing
     if (!effectiveIsClosing && duration > 0) {
+      console.log('Setting toast dismiss timer for', duration, 'ms');
       // Set timer to close the toast after duration
       dismissTimer = setTimeout(() => {
+        console.log('Toast dismiss timer fired, starting closing animation');
         setInternalIsClosing(true);
         
         // After animation completes, call the onClose callback
         closeTimer = setTimeout(() => {
+          console.log('Toast close timer fired, calling onClose');
           if (onClose) onClose();
         }, 500); // Match this with the animation duration
       }, duration);
@@ -103,10 +107,27 @@ const Toast = ({ message, color, isClosing, duration = 5000, onClose }) => {
     
     // Cleanup timers
     return () => {
-      if (dismissTimer) clearTimeout(dismissTimer);
-      if (closeTimer) clearTimeout(closeTimer);
+      if (dismissTimer) {
+        console.log('Clearing toast dismiss timer');
+        clearTimeout(dismissTimer);
+      }
+      if (closeTimer) {
+        console.log('Clearing toast close timer');
+        clearTimeout(closeTimer);
+      }
     };
   }, [duration, effectiveIsClosing, onClose]);
+  
+  // Clean up completely when unmounted
+  useEffect(() => {
+    return () => {
+      // Ensure we clean up properly when unmounted
+      if (onClose && !effectiveIsClosing) {
+        console.log('Toast unmounted without proper closure, calling onClose');
+        onClose();
+      }
+    };
+  }, [onClose, effectiveIsClosing]);
   
   const handleClose = () => {
     setInternalIsClosing(true);
