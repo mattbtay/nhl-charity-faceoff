@@ -211,7 +211,7 @@ export default function Home() {
           message={`Thank you for your donation to ${donatedTeam.charityName}! Watch the total update in real-time.`}
           color={donatedTeam.teamColor}
           isClosing={isToastClosing}
-          duration={5000}
+          duration={6000}
           onClose={handleToastClose}
         />
       )}
