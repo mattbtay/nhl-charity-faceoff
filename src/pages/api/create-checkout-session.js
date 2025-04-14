@@ -11,6 +11,14 @@ const stripe = stripeKey && !stripeKey.includes('${STRIPE')
   ? new Stripe(stripeKey) 
   : null;
 
+// Always generate absolute URLs to the production domain
+// This ensures we never get auth prompts from Vercel
+const getAbsoluteUrl = (path) => {
+  // Force production URL for consistency
+  const baseUrl = 'https://nhl-charity-faceoff.vercel.app';
+  return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+};
+
 export default async function handler(req, res) {
   // Log request method for debugging
   console.log(`Checkout API called with method: ${req.method}`);
@@ -50,8 +58,13 @@ export default async function handler(req, res) {
     console.log('Creating checkout session for:', { teamId, amount, charityName });
 
     // Ensure we have a proper URL with protocol
-    const origin = req.headers.origin || 
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://nhl-charity-faceoff.vercel.app');
+    let origin = req.headers.origin;
+    
+    // If origin is missing or contains "vercel", use the production URL
+    if (!origin || origin.includes("vercel.app")) {
+      // Always default to production URL for checkout redirects
+      origin = 'https://nhl-charity-faceoff.vercel.app';
+    }
     
     console.log('Using origin for URLs:', origin);
 
@@ -74,8 +87,8 @@ export default async function handler(req, res) {
         },
       ],
       mode: 'payment',
-      success_url: `${origin}/donation-success?session_id={CHECKOUT_SESSION_ID}&team=${teamId}`,
-      cancel_url: `${origin}`,
+      success_url: getAbsoluteUrl(`/donation-success?session_id={CHECKOUT_SESSION_ID}&team=${teamId}`),
+      cancel_url: getAbsoluteUrl('/'),
       metadata: {
         teamId,
         charityName,
