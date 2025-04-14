@@ -186,6 +186,34 @@ export default function Home() {
         }).catch(err => {
           console.error('Failed to remove URL parameters:', err);
         });
+        
+        // Fallback manual update in case the webhook doesn't trigger
+        // This is important for environments where webhooks may not reach the server
+        setTimeout(async () => {
+          try {
+            console.log('🔄 Triggering fallback donation update for session:', sessionId);
+            const response = await fetch('/api/test-donation', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                teamId: teamId,
+                amount: 25, // Default fallback amount
+                sessionId: sessionId
+              }),
+            });
+            
+            if (response.ok) {
+              const result = await response.json();
+              console.log('✅ Fallback donation update successful:', result);
+            } else {
+              console.error('❌ Fallback donation update failed:', await response.text());
+            }
+          } catch (error) {
+            console.error('❌ Error in fallback donation update:', error);
+          }
+        }, 5000); // Wait 5 seconds to see if webhook updates things first
       } else {
         console.error('❌ Could not find team with ID:', teamId);
         // Still clean up the URL
