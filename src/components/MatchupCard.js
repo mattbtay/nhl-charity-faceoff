@@ -1,6 +1,8 @@
+import { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import TeamCard from './TeamCard';
 import { teams } from '../config/teams';
+import { subscribeToDonationTotals } from '../config/firebase';
 
 const MatchupContainer = styled.div`
   display: flex;
@@ -35,12 +37,41 @@ const MatchupContainer = styled.div`
   }
 `;
 
+const TeamsContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  flex: 1;
+
+  @media (min-width: ${props => props.theme.breakpoints.md}) {
+    flex-direction: row;
+    align-items: stretch;
+    justify-content: space-around;
+    position: relative;
+  }
+`;
+
+const TeamWrapper = styled.div`
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  max-width: 320px;
+  width: 100%;
+
+  @media (max-width: ${props => props.theme.breakpoints.md}) {
+    margin: 0 auto;
+  }
+`;
+
 const VersusContainer = styled.div`
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 1rem;
-  position: relative;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   z-index: 1;
 
   &:before {
@@ -52,6 +83,13 @@ const VersusContainer = styled.div`
     border-radius: 50%;
     z-index: -1;
     opacity: 0.5;
+  }
+
+  @media (max-width: ${props => props.theme.breakpoints.md}) {
+    position: relative;
+    left: auto;
+    top: auto;
+    transform: none;
   }
 `;
 
@@ -73,6 +111,7 @@ const DifferenceBadge = styled.div`
   padding: 0.5rem 1rem;
   border-radius: 1rem;
   background-color: ${props => props.theme.colors.backgroundAlt};
+  white-space: nowrap;
 `;
 
 const RoundInfo = styled.div`
@@ -95,19 +134,6 @@ const RoundInfo = styled.div`
   }
 `;
 
-const TeamsContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-  flex: 1;
-
-  @media (min-width: ${props => props.theme.breakpoints.md}) {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-around;
-  }
-`;
-
 const formatNumber = (number) => {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -119,6 +145,39 @@ const formatNumber = (number) => {
 const MatchupCard = ({ matchup }) => {
   const team1 = teams[matchup.team1];
   const team2 = teams[matchup.team2];
+  const [donationTotals, setDonationTotals] = useState({});
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    console.log('MatchupCard mounted for teams:', team1.id, team2.id);
+    
+    try {
+      const unsubscribe = subscribeToDonationTotals((teams) => {
+        console.log('Received teams update in MatchupCard:', teams);
+        setDonationTotals(teams);
+        setIsLoading(false);
+      });
+
+      return () => {
+        console.log('MatchupCard unmounting, cleaning up subscription');
+        unsubscribe();
+      };
+    } catch (error) {
+      console.error('Error in MatchupCard effect:', error);
+      setIsLoading(false);
+    }
+  }, [team1.id, team2.id]);
+
+  const getTeamTotal = (team) => {
+    if (donationTotals[team.id]?.donationTotal !== undefined) {
+      return donationTotals[team.id].donationTotal;
+    }
+    return team.donationTotal;
+  };
+
+  const team1Total = getTeamTotal(team1);
+  const team2Total = getTeamTotal(team2);
+  const difference = Math.abs(team1Total - team2Total);
 
   const addUtmParams = (url, teamUtmParams) => {
     const urlObj = new URL(url);
@@ -128,29 +187,31 @@ const MatchupCard = ({ matchup }) => {
     return urlObj.toString();
   };
 
-  const difference = Math.abs(team1.donationTotal - team2.donationTotal);
-
   return (
     <div>
       <RoundInfo>{matchup.round}</RoundInfo>
       <MatchupContainer>
         <TeamsContainer>
-          <TeamCard
-            team={team1}
-            donationUrl={addUtmParams(team1.charityUrl, team1.utmParams)}
-          />
+          <TeamWrapper>
+            <TeamCard
+              team={team1}
+              donationUrl={addUtmParams(team1.charityUrl, team1.utmParams)}
+            />
+          </TeamWrapper>
           <VersusContainer>
             <VersusText>VS</VersusText>
-            {difference > 0 && (
+            {!isLoading && difference > 0 && (
               <DifferenceBadge>
                 Difference: {formatNumber(difference)}
               </DifferenceBadge>
             )}
           </VersusContainer>
-          <TeamCard
-            team={team2}
-            donationUrl={addUtmParams(team2.charityUrl, team2.utmParams)}
-          />
+          <TeamWrapper>
+            <TeamCard
+              team={team2}
+              donationUrl={addUtmParams(team2.charityUrl, team2.utmParams)}
+            />
+          </TeamWrapper>
         </TeamsContainer>
       </MatchupContainer>
     </div>

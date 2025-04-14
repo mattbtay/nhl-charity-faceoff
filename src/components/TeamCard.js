@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import styled from 'styled-components';
 import { subscribeToDonationTotals } from '../config/firebase';
+import Spinner from './Spinner';
 
 const Card = styled.div`
   display: flex;
@@ -13,6 +14,7 @@ const Card = styled.div`
   width: 100%;
   max-width: 320px;
   margin: 0 auto;
+  height: 100%;
   transition: transform ${props => props.theme.transitions.default};
   position: relative;
   overflow: hidden;
@@ -42,6 +44,7 @@ const LogoContainer = styled.div`
   width: 160px;
   height: 160px;
   margin-bottom: 2rem;
+  flex-shrink: 0;
   transition: transform ${props => props.theme.transitions.default};
 
   ${Card}:hover & {
@@ -57,6 +60,7 @@ const TeamName = styled.h2`
   margin-bottom: 0.75rem;
   text-align: center;
   letter-spacing: -0.5px;
+  flex-shrink: 0;
 `;
 
 const CharityName = styled.h3`
@@ -65,12 +69,18 @@ const CharityName = styled.h3`
   margin-bottom: 1.5rem;
   text-align: center;
   line-height: 1.4;
+  flex-shrink: 0;
+  min-height: 3em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 `;
 
 const DonationInfo = styled.div`
   width: 100%;
-  margin-bottom: 2rem;
+  margin-bottom: auto;
   text-align: center;
+  flex-shrink: 0;
 `;
 
 const DonationAmount = styled.div`
@@ -87,6 +97,7 @@ const DonationAmount = styled.div`
     vertical-align: top;
     margin-right: 0.25rem;
     opacity: 0.8;
+    display: ${props => props.isLoading ? 'none' : 'inline'};
   }
 `;
 
@@ -110,6 +121,7 @@ const DonateButton = styled.a`
   transition: all ${props => props.theme.transitions.default};
   position: relative;
   overflow: hidden;
+  margin-top: 2rem;
 
   &:before {
     content: '';
@@ -142,6 +154,15 @@ const DonateButton = styled.a`
   }
 `;
 
+const LoadingContainer = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  font-size: 1.5rem;
+  min-height: 3.5rem;
+`;
+
 const formatNumber = (number) => {
   return new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 0,
@@ -149,27 +170,37 @@ const formatNumber = (number) => {
 };
 
 const TeamCard = ({ team, donationUrl }) => {
-  const [donationTotal, setDonationTotal] = useState(team.donationTotal);
+  const [donationTotal, setDonationTotal] = useState(null);
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    console.log('TeamCard mounted for team:', team.id, 'initial total:', team.donationTotal);
+    console.log('TeamCard mounted for team:', team.id);
     
-    // Subscribe to real-time updates
-    const unsubscribe = subscribeToDonationTotals((teams) => {
-      console.log('Received teams update in TeamCard:', teams);
-      const teamData = teams[team.id];
-      console.log('Found team data:', teamData);
-      if (teamData && teamData.donationTotal !== undefined) {
-        console.log('Updating donation total for', team.id, 'to', teamData.donationTotal);
-        setDonationTotal(teamData.donationTotal);
-      }
-    });
+    try {
+      // Subscribe to real-time updates
+      const unsubscribe = subscribeToDonationTotals((teams) => {
+        console.log('Received teams update in TeamCard:', teams);
+        const teamData = teams[team.id];
+        console.log('Found team data:', teamData);
+        if (teamData && teamData.donationTotal !== undefined) {
+          console.log('Updating donation total for', team.id, 'to', teamData.donationTotal);
+          setDonationTotal(teamData.donationTotal);
+          setError(null);
+        }
+        setIsLoading(false);
+      });
 
-    // Cleanup subscription on unmount
-    return () => {
-      console.log('TeamCard unmounting, cleaning up subscription');
-      unsubscribe();
-    };
+      // Cleanup subscription on unmount
+      return () => {
+        console.log('TeamCard unmounting, cleaning up subscription');
+        unsubscribe();
+      };
+    } catch (error) {
+      console.error('Error in TeamCard effect:', error);
+      setError(error);
+      setIsLoading(false);
+    }
   }, [team.id]);
 
   return (
@@ -187,8 +218,15 @@ const TeamCard = ({ team, donationUrl }) => {
       <TeamName>{team.name}</TeamName>
       <CharityName>{team.charityName}</CharityName>
       <DonationInfo>
-        <DonationAmount teamColor={team.teamColor}>
-          {formatNumber(donationTotal)}
+        <DonationAmount teamColor={team.teamColor} isLoading={isLoading}>
+          {isLoading ? (
+            <LoadingContainer>
+              <Spinner color={team.teamColor} />
+              Loading...
+            </LoadingContainer>
+          ) : (
+            formatNumber(donationTotal ?? team.donationTotal)
+          )}
         </DonationAmount>
         <DonationLabel>Raised</DonationLabel>
       </DonationInfo>
