@@ -328,7 +328,7 @@ const TeamCard = ({ team }) => {
         body: JSON.stringify({
           teamId: team.id,
           charityName: team.charityName,
-          amount: 100, // $100 fixed donation amount
+          amount: 25, // $25 default donation amount (user can adjust in Stripe)
         }),
       });
 
